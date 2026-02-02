@@ -25,17 +25,26 @@ def init_db():
 
 # --- THE VULNERABLE ENDPOINT (For ZAP/Trivy to find) ---
 @app.route('/product')
+@app.route('/product')
 def get_product():
     product_id = request.args.get('id')
     conn = sqlite3.connect('products.db')
     cursor = conn.cursor()
-    # DANGEROUS: String formatting (SQLi Vulnerability)
-    query = f"SELECT name, price FROM products WHERE id = {product_id}"
-    cursor.execute(query)
+
+    # ❌ VULNERABLE (Old Way): 
+    # query = f"SELECT name, price FROM products WHERE id = {product_id}"
+    
+    # ✅ SECURE (New Way): Use '?' placeholder
+    query = "SELECT name, price FROM products WHERE id = ?"
+    
+    # The database driver now sanitizes the input automatically
+    cursor.execute(query, (product_id,)) 
+    
     result = cursor.fetchone()
     conn.close()
+    
     return {"product": result[0], "price": result[1]} if result else {"error": "Not Found"}
-
+    
 # --- THE NEW EXTENDED ENDPOINT (Securely Parameterized) ---
 @app.route('/products/category/<cat_name>')
 def get_by_category(cat_name):
