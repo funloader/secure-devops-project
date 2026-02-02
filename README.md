@@ -42,3 +42,35 @@ A comprehensive **DevSecOps** laboratory demonstrating a "Shift Left" security s
 * **SCA**: Trivy (Dependencies & Images).
 * **DAST**: OWASP ZAP (Dynamic Scan).
 * **IaC**: Checkov (K8s Manifests).
+
+---
+
+## 🔍 Security Disclosure & Mitigation Report
+
+This project serves as a case study in identifying and remediating common web vulnerabilities (OWASP Top 10). Below are the specific findings and the technical steps taken to secure the environment.
+
+### 1. SQL Injection (SQLi) - [OWASP A03:2021]
+
+* **Vulnerability:** The `product-api` was using Python f-strings to build SQL queries, allowing an attacker to manipulate the database logic via the `id` parameter.
+* **Proof of Concept (PoC):** An attacker could use `0 UNION SELECT sqlite_version(), 0` to leak database metadata.
+* **Mitigation:** Implemented **Parameterized Queries**. By using the `?` placeholder in `sqlite3`, the database driver now treats all user input as literal data rather than executable code.
+
+### 2. Broken Access Control - [OWASP A01:2021]
+
+* **Vulnerability:** The `order-api` contained an insecure `PATCH` endpoint that allowed any unauthenticated user to change an order's status from `Shipped` to `Delivered`.
+* **Proof of Concept (PoC):** A simple `Invoke-RestMethod` without headers was able to manipulate the business logic.
+* **Mitigation:** Implemented **Header-based Authorization**. The endpoint now requires a valid `x-admin-key` in the request header, returning a `403 Forbidden` for unauthorized attempts.
+
+### 3. Security Misconfiguration & Info Disclosure - [OWASP A05:2021]
+
+* **Vulnerability:** The Nginx frontend was broadcasting its specific version number in HTTP response headers, assisting attackers in version-specific exploit research.
+* **Mitigation:** * Hardened `nginx.conf` with `server_tokens off;`.
+* Added security headers: `X-Frame-Options` (Clickjacking protection) and `X-Content-Type-Options` (MIME-sniffing protection).
+
+### 4. Supply Chain & Container Security
+
+* **Vulnerability:** Initial scans showed **40+ High/Critical CVEs** and containers running as `root`.
+* **Mitigation:** * Migrated to **Alpine Linux** base images to reduce the attack surface.
+* Implemented `USER` directives in Dockerfiles to ensure the application runs with **Least Privilege**.
+
+---
