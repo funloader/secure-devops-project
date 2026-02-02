@@ -4,52 +4,68 @@
     <meta charset="UTF-8">
     <title>DevSecOps Dashboard</title>
     <style>
-        body { font-family: sans-serif; background: #f4f4f4; padding: 20px; }
-        .card { background: white; padding: 15px; margin: 10px; border-radius: 8px; box-shadow: 0 2px 5px rgba(0,0,0,0.1); }
-        h1 { color: #2c3e50; }
-        .status { color: green; font-weight: bold; }
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #f0f2f5; padding: 40px; }
+        .container { max-width: 800px; margin: auto; }
+        .card { background: white; padding: 20px; margin-bottom: 20px; border-radius: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.05); }
+        h1 { color: #1a73e8; border-bottom: 2px solid #e8eaed; padding-bottom: 10px; }
+        .product-item { display: flex; justify-content: space-between; padding: 10px 0; border-bottom: 1px solid #eee; }
+        .product-item:last-child { border-bottom: none; }
+        .price { font-weight: bold; color: #2ecc71; }
+        .error { color: #d93025; font-weight: bold; }
     </style>
 </head>
 <body>
 
-    <h1>Products</h1>
-    <ul id="product-list">
-        <li>Loading...</li>
-    </ul>
+    <div class="container">
+        <div class="card">
+            <h1>Product Inventory</h1>
+            <div id="product-status"></div>
+            <div id="product-list">Loading products...</div>
+        </div>
 
-    <h1>Orders</h1>
-    <ul id="order-list">
-        <li>Loading...</li>
-    </ul>
+        <div class="card">
+            <h1>Recent Orders</h1>
+            <div id="order-list">Loading orders...</div>
+        </div>
+    </div>
 
     <script>
         async function fetchData() {
+            // 1. Fetch Extended Inventory
             try {
-                // ✅ FIXED: Correct endpoints + data structure
-                const prodRes = await fetch('http://localhost:5001/product?id=1');
+                // Changed to the new 'all products' endpoint or loop through IDs
+                // For now, let's assume we fetch the full inventory list
+                const prodRes = await fetch('http://localhost:5001/products/category/Electronics'); 
                 const prodData = await prodRes.json();
                 
-                // ✅ FIXED: Use .product (matches API) + hardcoded price
-                document.getElementById('product-list').innerHTML = 
-                    `<li>${prodData.product || 'Unknown'} - $999</li>`;
+                let prodHtml = '';
+                prodData.items.forEach(item => {
+                    prodHtml += `
+                        <div class="product-item">
+                            <span>📦 ${item.name}</span>
+                            <span class="price">$${item.price}</span>
+                        </div>`;
+                });
+                document.getElementById('product-list').innerHTML = prodHtml;
+            } catch (err) {
+                document.getElementById('product-list').innerHTML = '<p class="error">Product API Offline</p>';
+            }
 
-                // ✅ FIXED: Correct /order endpoint
+            // 2. Fetch Orders
+            try {
                 const orderRes = await fetch('http://localhost:5002/order');
                 const orderData = await orderRes.json();
-                
-                // ✅ FIXED: Single order object → extract order_id
-                document.getElementById('order-list').innerHTML = 
-                    `<li>Order ID: ${orderData.order_id || 'N/A'}</li>`;
-
+                document.getElementById('order-list').innerHTML = `
+                    <div class="product-item">
+                        <span>🆔 Order #${orderData.order_id}</span>
+                        <span>Status: <strong>${orderData.status}</strong></span>
+                    </div>`;
             } catch (err) {
-                console.error("API Error:", err);
-                document.getElementById('product-list').innerHTML = '<li>API Unreachable</li>';
-                document.getElementById('order-list').innerHTML = '<li>API Unreachable</li>';
+                document.getElementById('order-list').innerHTML = '<p class="error">Order API Offline</p>';
             }
         }
 
         fetchData();
     </script>
-
 </body>
 </html>
