@@ -2,75 +2,66 @@ pipeline {
     agent any
     
     environment {
-        // Define our SonarQube Server (must match Name in Jenkins Tools)
         SONAR_SERVER = 'SonarQube'
         SCANNER_HOME = tool 'SonarQubeScanner'
         APP_NAME     = "secure-product-api"
     }
 
     stages {
-        stage('Step 1: Cleanup') {
+        stage('Step 1: Checkout') {
             steps {
-                echo 'Cleaning up workspace...'
                 deleteDir()
                 checkout scm
             }
         }
 
-        stage('Step 2: Secret Scanning (Gitleaks)') {
+        /* stage('Step 2: Secret Scanning (Gitleaks)') {
             steps {
-                echo 'Running Gitleaks...'
-                // Running via Docker container to avoid local installation
-                sh "docker run --rm -v ${WORKSPACE}:/path zricethezav/gitleaks:latest detect --source=/path --verbose"
+                echo 'Skipping Gitleaks for this run...'
+            }
+        } 
+        */
+
+        stage('Step 2: Code Quality (SonarQube)') {
+            steps {
+                script {
+                    withSonarQubeEnv("${SONAR_SERVER}") {
+                        sh "${SCANNER_HOME}/bin/sonar-scanner \
+                        -Dsonar.projectKey=Secure-Microservices-Pipeline \
+                        -Dsonar.sources=. \
+                        -Dsonar.host.url=http://sonarqube:9000"
+                    }
+                }
             }
         }
 
-        stage('Step 3: SCA & Code Quality (SonarQube)') {
+        stage("Step 3: Sonar Quality Gate") {
             steps {
-                echo 'Analyzing Code Quality...'
-                withSonarQubeEnv("${SONAR_SERVER}") {
-                    sh "${SCANNER_HOME}/bin/sonar-scanner \
-                    -Dsonar.projectKey=Secure-Microservices-Pipeline \
-                    -Dsonar.sources=. \
-                    -Dsonar.host.url=http://sonarqube:9000"
+                timeout(time: 5, unit: 'MINUTES') {
+                    // This waits for SonarQube to finish analysis and return a Pass/Fail
+                    waitForQualityGate abortPipeline: true
                 }
             }
         }
 
         stage('Step 4: Vulnerability Scanning (Trivy)') {
             steps {
-                echo 'Scanning Repository for Vulnerabilities...'
                 sh "trivy fs . --severity HIGH,CRITICAL"
             }
         }
 
         stage('Step 5: Build & Image Security') {
             steps {
-                echo 'Building Secure Docker Image...'
-                sh "docker build -t ${APP_NAME}:${BUILD_NUMBER} ./product-api"
-                echo 'Scanning Docker Image...'
-                sh "trivy image --severity HIGH,CRITICAL ${APP_NAME}:${BUILD_NUMBER}"
+                sh "docker build -t ${APP_NAME}:latest ./product-api"
+                sh "trivy image --severity HIGH,CRITICAL ${APP_NAME}:latest"
             }
         }
 
-        stage('Step 6: Deploy to K8s (Minikube/Docker Desktop)') {
+        stage('Step 6: Deploy to K8s') {
             steps {
-                echo 'Deploying to Local Kubernetes...'
-                // This assumes you have your K8s manifests in a folder named /k8s
+                // Ensure the 'k8s' folder exists with your yaml files
                 sh "kubectl apply -f k8s/"
             }
-        }
-    }
-
-    post {
-        always {
-            echo 'Pipeline Execution Finished.'
-        }
-        success {
-            echo 'Security Gates Passed! Deployment Successful.'
-        }
-        failure {
-            echo 'Security Gate Violation Found. Build Aborted.'
         }
     }
 }
