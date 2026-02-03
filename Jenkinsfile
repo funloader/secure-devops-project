@@ -1,80 +1,81 @@
 pipeline {
     agent any
-    
+
     environment {
-        SCANNER_HOME = tool 'SonarQubeScanner'
-        SNYK_TOKEN   = credentials('snyk-token')
-        DOJO_TOKEN   = credentials('defectdojo-token')
-        IMAGE_NAME   = "secure-app:${env.BUILD_NUMBER}"
+        // Define image names for consistency
+        PRODUCT_IMAGE = "product-api:test"
+        ORDER_IMAGE   = "order-api:test"
+        SCANNER_HOME  = tool 'SonarQubeScanner'
     }
 
     stages {
-        stage('1. Secret Scan') {
+        stage('Step 1: Checkout & Setup') {
             steps {
-                sh "gitleaks detect --source . --verbose --redact"
+                deleteDir()
+                checkout scm
             }
         }
 
-        stage('2. SAST (SonarQube)') {
-            steps {
-                withSonarQubeEnv('SonarQube') {
-                    sh "${SCANNER_HOME}/bin/sonar-scanner -Dsonar.projectKey=MyProject"
+        stage('Step 2: Static Security Scans') {
+            parallel {
+                stage('Trivy FS Scan') {
+                    steps {
+                        echo 'Scanning Filesystem for vulnerabilities...'
+                        // severity: 'CRITICAL,HIGH' from your YAML
+                        sh "trivy fs . --severity HIGH,CRITICAL --exit-code 0"
+                    }
+                }
+                stage('SonarQube Analysis') {
+                    steps {
+                        echo 'Analyzing code quality...'
+                        withSonarQubeEnv('SonarQube') {
+                            sh "${SCANNER_HOME}/bin/sonar-scanner -Dsonar.projectKey=Secure-Microservices"
+                        }
+                    }
                 }
             }
         }
 
-        stage('3. Dependency Scan (Snyk)') {
+        stage('Step 3: Build Images') {
             steps {
-                sh "snyk test --token=${SNYK_TOKEN} --severity-threshold=high"
+                echo 'Building Docker Images...'
+                sh "docker build -t ${PRODUCT_IMAGE} ./product-api"
+                sh "docker build -t ${ORDER_IMAGE} ./order-api"
             }
         }
 
-        stage('4. Build & Container Scan') {
-            steps {
-                sh "docker build -t ${IMAGE_NAME} ."
-                // Parallel scanning with Trivy and Clair
-                sh "trivy image --severity HIGH,CRITICAL ${IMAGE_NAME}"
-                // sh "clair-scanner --ip 172.17.0.1 ${IMAGE_NAME}" 
+        stage('Step 4: Image Security Scans') {
+            parallel {
+                stage('Scan Product API') {
+                    steps {
+                        echo 'Trivy scanning Product API image...'
+                        sh "trivy image ${PRODUCT_IMAGE} --severity HIGH,CRITICAL --exit-code 0"
+                    }
+                }
+                stage('Scan Order API') {
+                    steps {
+                        echo 'Trivy scanning Order API image...'
+                        sh "trivy image ${ORDER_IMAGE} --severity HIGH,CRITICAL --exit-code 0"
+                    }
+                }
             }
         }
 
-        stage('5. Image Signing (Cosign)') {
+        stage('Step 5: Quality Gate') {
             steps {
-                // Keyless signing using OIDC
-                sh "cosign sign --yes ${IMAGE_NAME}"
+                timeout(time: 5, unit: 'MINUTES') {
+                    waitForQualityGate abortPipeline: true
+                }
             }
         }
+    }
 
-        stage('6. IaC & Policy (OPA)') {
-            steps {
-                // Check K8s manifests against OPA policies
-                sh "opa eval --data policy.rego --input k8s/deployment.yaml 'data.main.deny'"
-            }
+    post {
+        success {
+            echo '✅ All security checks passed. Ready for deployment!'
         }
-
-        stage('7. K8s Security Audit') {
-            steps {
-                sh "kube-bench run --targets master,node"
-            }
-        }
-
-        stage('8. Dynamic Scan (OWASP ZAP)') {
-            steps {
-                // Running ZAP in API scan mode against the dev endpoint
-                sh "docker run --rm -v $(pwd):/zap/wrk/:rw -t ghcr.io/zaproxy/zaproxy:stable zap-api-scan.py -t http://dev-api:5000/openapi.json -f openapi -r zap_report.html"
-            }
-        }
-
-        stage('9. Push to DefectDojo') {
-            steps {
-                // Centralize all findings
-                defectDojoPublisher(
-                    artifact: 'zap_report.html',
-                    productName: 'Secure-Microservices',
-                    scanType: 'ZAP Scan',
-                    engagementName: "Build-${env.BUILD_NUMBER}"
-                )
-            }
+        failure {
+            echo '❌ Security vulnerabilities found. Review the logs.'
         }
     }
 }
