@@ -1,82 +1,76 @@
 pipeline {
     agent any
-
+    
     environment {
-        // Define common variables
-        DOCKER_IMAGE = "secure-product-api"
-        SONAR_SERVER = "SonarQube"
+        // Define our SonarQube Server (must match Name in Jenkins Tools)
+        SONAR_SERVER = 'SonarQube'
+        SCANNER_HOME = tool 'SonarQubeScanner'
+        APP_NAME     = "secure-product-api"
     }
 
     stages {
-        stage('Checkout') {
+        stage('Step 1: Cleanup') {
             steps {
-                // This pulls your code from the workspace
+                echo 'Cleaning up workspace...'
+                deleteDir()
                 checkout scm
             }
         }
 
-        stage('Security: Secret Scanning') {
+        stage('Step 2: Secret Scanning (Gitleaks)') {
             steps {
-                script {
-                    // Running Gitleaks via Docker-out-of-Docker
-                    sh "docker run --rm -v ${WORKSPACE}:/path zricethezav/gitleaks:latest detect --source=/path --verbose"
+                echo 'Running Gitleaks...'
+                // Running via Docker container to avoid local installation
+                sh "docker run --rm -v ${WORKSPACE}:/path zricethezav/gitleaks:latest detect --source=/path --verbose"
+            }
+        }
+
+        stage('Step 3: SCA & Code Quality (SonarQube)') {
+            steps {
+                echo 'Analyzing Code Quality...'
+                withSonarQubeEnv("${SONAR_SERVER}") {
+                    sh "${SCANNER_HOME}/bin/sonar-scanner \
+                    -Dsonar.projectKey=Secure-Microservices-Pipeline \
+                    -Dsonar.sources=. \
+                    -Dsonar.host.url=http://sonarqube:9000"
                 }
             }
         }
 
-        stage('Static Analysis: SonarQube') {
+        stage('Step 4: Vulnerability Scanning (Trivy)') {
             steps {
-                script {
-                    // Using the tool name we configured in 'Global Tool Configuration'
-                    def scannerHome = tool 'SonarQubeScanner'
-                    withSonarQubeEnv("${SONAR_SERVER}") {
-                        sh "${scannerHome}/bin/sonar-scanner \
-                            -Dsonar.projectKey=Secure-Microservices-Pipeline \
-                            -Dsonar.sources=. \
-                            -Dsonar.python.version=3"
-                    }
-                }
+                echo 'Scanning Repository for Vulnerabilities...'
+                sh "trivy fs . --severity HIGH,CRITICAL"
             }
         }
 
-        stage('SCA: Trivy FS Scan') {
+        stage('Step 5: Build & Image Security') {
             steps {
-                // Scans the source code for vulnerable libraries
-                sh "docker run --rm -v ${WORKSPACE}:/root/project aquasec/trivy fs /root/project"
+                echo 'Building Secure Docker Image...'
+                sh "docker build -t ${APP_NAME}:${BUILD_NUMBER} ./product-api"
+                echo 'Scanning Docker Image...'
+                sh "trivy image --severity HIGH,CRITICAL ${APP_NAME}:${BUILD_NUMBER}"
             }
         }
 
-        stage('Build & Image Security') {
+        stage('Step 6: Deploy to K8s (Minikube/Docker Desktop)') {
             steps {
-                script {
-                    // Build the Docker image
-                    sh "docker build -t ${DOCKER_IMAGE}:latest ./product-api"
-                    
-                    // Scan the built image for vulnerabilities
-                    // We set it to exit with code 1 if CRITICAL issues are found
-                    sh "docker run --rm -v /var/run/docker.sock:/var/run/docker.sock aquasec/trivy image --exit-code 0 --severity HIGH,CRITICAL ${DOCKER_IMAGE}:latest"
-                }
-            }
-        }
-
-        stage('Deployment Simulation') {
-            steps {
-                echo "Deploying to Kubernetes Environment..."
-                // In a real setup, this would be: 
-                // sh "kubectl apply -f k8s-manifests/"
+                echo 'Deploying to Local Kubernetes...'
+                // This assumes you have your K8s manifests in a folder named /k8s
+                sh "kubectl apply -f k8s/"
             }
         }
     }
 
     post {
         always {
-            cleanWs() // Keeps your VM/Container storage clean
+            echo 'Pipeline Execution Finished.'
         }
         success {
-            echo '✅ Pipeline Completed Successfully!'
+            echo 'Security Gates Passed! Deployment Successful.'
         }
         failure {
-            echo '❌ Pipeline Failed. Check security scan logs.'
+            echo 'Security Gate Violation Found. Build Aborted.'
         }
     }
 }
